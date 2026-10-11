@@ -1,0 +1,16 @@
+{
+  "vehicle": "2021 Hyundai Sonata Hybrid Blue",
+  "driving_cycle": "udds.csv",
+  "fastsim_version": "3.1.0",
+  "simulation_steps": 1370,
+  "distance_km": 11.990433188724952,
+  "fuel_energy_mj": 23.336987121465217,
+  "initial_recorded_soc": 0.625,
+  "final_soc": 0.639666469541449,
+  "soc_change": 0.014666469541449012,
+  "minimum_observed_soc": 0.6099054998237577,
+  "maximum_observed_soc": 0.6904604531404077,
+  "soc_limit_violations": 0,
+  "cycle_tracking_failures": 0,
+  "soc_balancing_iterations": 1
+}
