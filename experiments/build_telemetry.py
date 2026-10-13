@@ -1,169 +1,130 @@
-import fastsim
-import pandas as pd
+
 from pathlib import Path
 
-
-vehicle = fastsim.Vehicle.from_resource(
-    "2021_Hyundai_Sonata_Hybrid_Blue_thrml.yaml"
-)
-
-cycle = fastsim.Cycle.from_resource("udds.csv")
-
-sim = fastsim.SimDrive(vehicle, cycle)
-sim.run()
-
-data = sim.to_dict()
-
-veh = data["veh"]
-hev = veh["pt_type"]["HEV"]
-
-histories = {
-    "vehicle": veh["history"],
-    "battery": hev["res"]["history"],
-    "engine": hev["fc"]["history"],
-    "motor": hev["em"]["history"],
-}
-
-print("\n=== TELEMETRY ALIGNMENT CHECK ===")
-
-for name, history in histories.items():
-    print(
-        f"{name}: "
-        f"{len(history['i'])} records"
-    )
-
-record_counts = {
-    name: len(history["i"])
-    for name, history in histories.items()
-}
-
-print("\nAll record counts match:",
-      len(set(record_counts.values())) == 1)
-
-
-print("\n=== SIMULATION STEP ALIGNMENT ===")
-
-reference_indices = histories["vehicle"]["i"]
-
-for name, history in histories.items():
-    indices = history["i"]
-
-    aligned = indices == reference_indices
-
-    print(f"{name} aligned: {aligned}")
-    print(f"  First 5 indices: {indices[:5]}")
-    print(f"  Last 5 indices: {indices[-5:]}")
-
-print("\n=== SIMULATION INDEX QUALITY ===")
-
-indices = histories["vehicle"]["i"]
-
-print("Total records:", len(indices))
-print("Unique indices:", len(set(indices)))
-
-print("Duplicate indices:", len(indices) - len(set(indices)))
-
-print(
-    "Indices consecutive:",
-    all(
-        indices[j] == indices[j - 1] + 1
-        for j in range(1, len(indices))
-    )
-)
-
-print("First index:", indices[0])
-print("Last index:", indices[-1])
-
 import pandas as pd
 
-vehicle_history = histories["vehicle"]
-battery_history = histories["battery"]
-engine_history = histories["engine"]
-motor_history = histories["motor"]
-
-telemetry_df = pd.DataFrame({
-    "step": vehicle_history["i"],
-    "time_s": vehicle_history["time_seconds"],
-    "speed_mps": vehicle_history["speed_ach_meters_per_second"],
-    "distance_m": vehicle_history["dist_meters"],
-    "battery_soc": battery_history["soc"],
-    "battery_power_w": battery_history["pwr_out_electrical_watts"],
-    "engine_power_w": engine_history["pwr_prop_watts"],
-    "fuel_energy_j": engine_history["energy_fuel_joules"],
-    "motor_power_w": motor_history["pwr_mech_prop_out_watts"],
-})
-
-print("\n=== UNIFIED TELEMETRY DATAFRAME ===")
-print("Shape:", telemetry_df.shape)
-print("\nColumns:")
-print(telemetry_df.columns.tolist())
-
-print("\nFirst five rows:")
-print(telemetry_df.head())
-
-print("\nMissing values:")
-print(telemetry_df.isna().sum())
+from src.hybrid_energy.simulation import run_simulation
+from src.hybrid_energy.telemetry import build_telemetry_dataframe
+from src.hybrid_energy.validation import validate_telemetry
 
 
-print("\n=== TELEMETRY QUALITY VALIDATION ===")
+VEHICLE_RESOURCE = "2021_Hyundai_Sonata_Hybrid_Blue_thrml.yaml"
+CYCLE_RESOURCE = "udds.csv"
 
-# 1. No missing values
-assert not telemetry_df.isna().any().any(), \
-    "Telemetry contains missing values"
-
-# 2. Simulation steps are unique
-assert telemetry_df["step"].is_unique, \
-    "Duplicate simulation steps detected"
-
-# 3. Timestamps increase
-assert telemetry_df["time_s"].is_monotonic_increasing, \
-    "Timestamps are not increasing"
-
-# 4. Speed cannot be negative
-assert (telemetry_df["speed_mps"] >= 0).all(), \
-    "Negative vehicle speed detected"
-
-# 5. SOC stays within configured limits
-assert telemetry_df["battery_soc"].between(
-    0.35, 0.90
-).all(), "Battery SOC limit violation"
-
-# 6. Distance never decreases
-assert telemetry_df["distance_m"].is_monotonic_increasing, \
-    "Distance decreased"
-
-# 7. Cumulative fuel energy never decreases
-assert telemetry_df["fuel_energy_j"].is_monotonic_increasing, \
-    "Cumulative fuel energy decreased"
-
-print("All telemetry quality checks passed!")
-print("Validated rows:", len(telemetry_df))
+OUTPUT_PATH = Path("data/processed/baseline_udds.parquet")
 
 
-output_path = Path("data/processed/baseline_udds.parquet")
-output_path.parent.mkdir(parents=True, exist_ok=True)
+def main():
+    # Step 1: Run FASTSim simulation
+    print("Running FASTSim baseline simulation...")
 
-# Write validated telemetry
-telemetry_df.to_parquet(
-    output_path,
-    engine="pyarrow",
-    index=False,
-)
+    sim = run_simulation(
+        vehicle_resource=VEHICLE_RESOURCE,
+        cycle_resource=CYCLE_RESOURCE,
+    )
 
-# Read it back to verify the artifact
-loaded_df = pd.read_parquet(
-    output_path,
-    engine="pyarrow",
-)
+    print("Simulation completed successfully!")
 
-pd.testing.assert_frame_equal(
-    telemetry_df,
-    loaded_df,
-)
+    # Step 2: Build unified telemetry DataFrame
+    telemetry_df = build_telemetry_dataframe(sim)
 
-print("\n=== PARQUET EXPORT VALIDATION ===")
-print("File:", output_path)
-print("Rows:", len(loaded_df))
-print("Columns:", len(loaded_df.columns))
-print("File size (KB):", round(output_path.stat().st_size / 1024, 2))
-print("Round-trip validation: PASSED")
+    print("\n=== TELEMETRY DATAFRAME ===")
+    print("Shape:", telemetry_df.shape)
+    print("\nColumns:")
+    print(telemetry_df.columns.tolist())
+
+    print("\nFirst five rows:")
+    print(telemetry_df.head())
+
+    # Step 3: Validate telemetry quality
+    print("\n=== TELEMETRY QUALITY VALIDATION ===")
+
+    assert not telemetry_df.empty, "Telemetry DataFrame is empty"
+
+    assert len(telemetry_df) == 1370, \
+        "Unexpected number of telemetry records"
+
+    assert telemetry_df.shape[1] == 9, \
+        "Unexpected number of telemetry columns"
+
+    assert not telemetry_df.isna().any().any(), \
+        "Telemetry contains missing values"
+
+    assert telemetry_df["step"].is_unique, \
+        "Duplicate simulation steps detected"
+
+    assert telemetry_df["step"].tolist() == list(range(1370)), \
+        "Simulation steps are missing or out of order"
+
+    assert telemetry_df["time_s"].is_monotonic_increasing, \
+        "Timestamps are not increasing"
+
+    assert (telemetry_df["speed_mps"] >= 0).all(), \
+        "Negative vehicle speed detected"
+
+    assert telemetry_df["distance_m"].is_monotonic_increasing, \
+        "Distance decreased"
+
+    assert telemetry_df["fuel_energy_j"].is_monotonic_increasing, \
+        "Cumulative fuel energy decreased"
+
+    # Read SOC limits from the actual vehicle configuration
+    vehicle_data = sim.to_dict()["veh"]
+    battery = vehicle_data["pt_type"]["HEV"]["res"]
+
+    min_soc = battery["min_soc"]
+    max_soc = battery["max_soc"]
+
+    assert telemetry_df["battery_soc"].between(
+        min_soc, max_soc
+    ).all(), "Battery SOC limit violation"
+
+    print("All telemetry quality checks passed!")
+
+    # Step 4: Export validated telemetry to Parquet
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    telemetry_df.to_parquet(
+        OUTPUT_PATH,
+        engine="pyarrow",
+        index=False,
+    )
+
+    print("\n=== PARQUET EXPORT ===")
+    print("File:", OUTPUT_PATH)
+    print("File size (KB):", round(OUTPUT_PATH.stat().st_size / 1024, 2))
+
+    # Step 5: Read Parquet back and validate
+    loaded_df = pd.read_parquet(
+        OUTPUT_PATH,
+        engine="pyarrow",
+    )
+
+    pd.testing.assert_frame_equal(
+        telemetry_df,
+        loaded_df,
+    )
+
+    print("\n=== FINAL VALIDATION ===")
+    print("Rows:", len(loaded_df))
+    print("Columns:", len(loaded_df.columns))
+    print("Parquet round-trip validation: PASSED")
+
+    print("\nBaseline telemetry pipeline completed successfully!")
+
+    # Retrieve SOC limits from the simulated vehicle
+    vehicle_data = sim.to_dict()["veh"]
+    battery = vehicle_data["pt_type"]["HEV"]["res"]
+
+    # Validate telemetry using the reusable module
+    validate_telemetry(
+        telemetry_df,
+        min_soc=battery["min_soc"],
+        max_soc=battery["max_soc"],
+    )
+
+    print("Telemetry quality validation: PASSED")
+
+    
+if __name__ == "__main__":
+    main()
